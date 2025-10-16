@@ -1,6 +1,9 @@
 import pandas as pd
 
 class DataLoader:
+    '''
+    Класс DataLoader - для загрузки данных (пользователи, опросник, методики)
+    '''
     def __init__(self, data_dir: str):
         self.data_dir = data_dir
         self.users = None

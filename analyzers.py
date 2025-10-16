@@ -1,9 +1,13 @@
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
+from sklearn.preprocessing import StandardScaler
 
 class QuestionnaireAnalyzer:
     """
-    Анализ опросника: очистка, инверсия и расчет альфа Кронбаха.
+    Класс QuestionnaireAnalyzer - для обработки результатов опросника
+    compute_alpha() - рассчёт альфа Кронбаха
+    count_questions() - подсчёт баллов за вопросы
+    transfrom_scale() - трансформирует шкалу в значения от 0 до 100
     """
     def __init__(self, users_df, responses_df):
         self.users = users_df
@@ -30,7 +34,7 @@ class QuestionnaireAnalyzer:
             if q in response_matrix_clean.columns:
                 response_matrix_clean[q] = 6 - response_matrix_clean[q]
 
-        return self.response_matrix_clean
+        return response_matrix_clean
 
     @staticmethod
     def cronbach_alpha(df):
@@ -59,6 +63,7 @@ class QuestionnaireAnalyzer:
                 total += answers[index]
         return total
     
+    @staticmethod
     def transfrom_scale(df):
         df_analysis = df.copy()
         MIN_SCORE = 30
@@ -67,11 +72,22 @@ class QuestionnaireAnalyzer:
 
         df_analysis['questionnaire_scaled'] = ((df_analysis['questionnaire'] - MIN_SCORE) / RANGE) * 100
         df_analysis['questionnaire_scaled'] = df_analysis['questionnaire_scaled'].round(2)
+        
+        # Z-преобразование (ср=0, σ=1) — используем в моделях
+        scaler = StandardScaler()
+        df_analysis['questionnaire_z'] = scaler.fit_transform(
+            df_analysis[['questionnaire_scaled']]
+        )
+        
         return df_analysis
 
 class TaskAnalyzer:
     """
-    Подсчет классических метрик для BART, CCT и IGT.
+    Класс TaskAnalyzer - для обработки результатов прохождения методик
+    count_bart() - рассчёт для BART -> количество надуваний, время реакции, количество заработанных очков
+    count_cct_hot() - рассчёт для CCT-hot -> количество перевернутых карт, количество набранных очков
+    count_cct_cold() - рассчёт для CCT-cold -> количество перевернутых карт, время реакции, количество набранных очков
+    count_igt() - рассчёт для IGT -> "хорошие" - "плохие", время реакции, количество заработанных очков
     """
     def __init__(self, users_df, bart_df, cct_hot_df, cct_cold_df, igt_df):
         self.users = users_df
@@ -82,32 +98,35 @@ class TaskAnalyzer:
 
     def count_bart(self, user_id: int):
         if user_id not in self.bart['user_id'].values:
-            return np.nan, np.nan
+            return np.nan, np.nan, np.nan
         user_pumps = self.bart[self.bart['user_id'] == user_id]
         user_pumps = user_pumps[user_pumps['popped'] == 0]
         pumps = np.mean(user_pumps['pumps'])
         rts = np.mean(user_pumps['reaction_time'])
-        return pumps, rts
+        bart_points = user_pumps['points_earned'].sum()
+        return pumps, rts, bart_points
 
     def count_cct_hot(self, user_id: int):
         if user_id not in self.cct_hot['user_id'].values:
-            return np.nan
+            return np.nan, np.nan
         user_cards = self.cct_hot[self.cct_hot['user_id'] == user_id]
         user_cards = user_cards[user_cards['trial_type'] == 'experimental']
         cards = np.mean(user_cards['flipped_cards'])
-        return cards
+        cct_hot_points = user_cards['points'].sum()
+        return cards, cct_hot_points
 
     def count_cct_cold(self, user_id: int):
         if user_id not in self.cct_cold['user_id'].values:
-            return np.nan, np.nan
+            return np.nan, np.nan, np.nan
         user_cards = self.cct_cold[self.cct_cold['user_id'] == user_id]
         cards = np.mean(user_cards['num_cards'])
         rts = np.mean(user_cards['reaction_time'])
-        return cards, rts
+        cct_cold_points = user_cards['points_earned'].sum()
+        return cards, rts, cct_cold_points
 
     def count_igt(self, user_id: int):
         if user_id not in self.igt['user_id'].values:
-            return np.nan, np.nan
+            return np.nan, np.nan, np.nan
         user_cards = self.igt[self.igt['user_id'] == user_id]
         user_cards = user_cards[user_cards['trial_number'] > 40]
         a_cards = user_cards[user_cards['deck'] == 'A'].count()
@@ -118,4 +137,5 @@ class TaskAnalyzer:
         c_and_d = c_cards['result_id'] + d_cards['result_id']
         rts = np.mean(user_cards['reaction_time'])
         net_score = c_and_d - a_and_b
-        return net_score, rts
+        igt_points = user_cards['points_earned'].sum()
+        return net_score, rts, igt_points

@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, RobustScaler, MinMaxScaler, MaxAbsScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, RobustScaler, MinMaxScaler, MaxAbsScaler, PowerTransformer
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -41,45 +41,94 @@ class DataPreprocessor:
         return df_clean
     
     @staticmethod
-    def normalize_metrics(df, norm_method='z', plot=False):
+    def check_normality(df, columns=None, alpha=0.05):
+        """
+        Проверка нормальности распределения для выбранных колонок.
+        
+        columns : list или None
+            Список колонок для проверки. Если None, то используется
+            ['bart_results', 'cct_hot_results', 'cct_cold_results', 'igt_results', 'questionnaire_scaled'].
+        alpha : float
+            Уровень значимости для статистических тестов (по умолчанию 0.05).
+        """
+
+        if columns is None:
+            columns = ['bart_results', 'cct_hot_results', 'cct_cold_results', 'igt_results', 'questionnaire_scaled']
+
+        for col in columns:
+            if col not in df.columns:
+                print(f"Колонка {col} отсутствует в DataFrame")
+                continue
+
+            data = df[col].dropna()
+
+            print(f"\nПроверка для колонки: {col} (n={len(data)})")
+
+            # Тест Шапиро-Уилка
+            shapiro_stat, shapiro_p = stats.shapiro(data)
+            print(f"   Shapiro-Wilk: stat={shapiro_stat:.3f}, p={shapiro_p:.3f} "
+                f"-> {'Нормальное' if shapiro_p > alpha else 'Не нормальное'}")
+
+            # Тест Д’Агостино-Пирсона
+            dag_stat, dag_p = stats.normaltest(data)
+            print(f"   D’Agostino-Pearson: stat={dag_stat:.3f}, p={dag_p:.3f} "
+                f"-> {'Нормальное' if dag_p > alpha else 'Не нормальное'}")
+
+            # Визуализация
+            fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+            sns.histplot(data, kde=True, ax=axes[0])
+            axes[0].set_title(f"Гистограмма: {col}")
+
+            stats.probplot(data, dist="norm", plot=axes[1])
+            axes[1].set_title(f"QQ-plot: {col}")
+
+            plt.tight_layout()
+            plt.show()
+    
+    @staticmethod
+    def normalize_metrics(df, column, norm_method='z', plot=False):
         df = df.copy()
-        metric_cols = [col for col in ['bart_results', 'cct_hot_results', 'cct_cold_results', 'igt_result'] if col in df.columns]
-        original = df[metric_cols].copy()
+        if column not in df.columns:
+            raise ValueError(f"Колонка '{column}' отсутствует в DataFrame")
+        original = df[column].copy()
 
         if norm_method == 'robust':
             scaler = RobustScaler()
-            df[metric_cols] = scaler.fit_transform(df[metric_cols])
+            df[column] = scaler.fit_transform(df[column])
             prefix = 'robust_'
         elif norm_method == 'minmax':
             scaler = MinMaxScaler()
-            df[metric_cols] = scaler.fit_transform(df[metric_cols])
+            df[column] = scaler.fit_transform(df[column])
             prefix = 'minmax_'
         elif norm_method == 'maxabs':
             scaler = MaxAbsScaler()
-            df[metric_cols] = scaler.fit_transform(df[metric_cols])
+            df[column] = scaler.fit_transform(df[column])
             prefix = 'maxabs_'
         elif norm_method == 'log':
-            for col in metric_cols:
-                df[col] = np.log(df[col] + 1 - df[col].min() if (df[col] <= 0).any() else df[col])
+            shift = 1 - df[column].min() if (df[column] <= 0).any() else 0
+            df[column] = np.log(df[column] + shift)
             prefix = 'log_'
+        elif norm_method == 'yeo':
+            scaler = PowerTransformer(method='yeo-johnson')
+            df[column] = scaler.fit_transform(df[[column]])
+            prefix = 'yeo_'
         else:
-            for col in metric_cols:
-                df[col] = (df[col] - df[col].mean()) / df[col].std()
+            df[column] = (df[column] - df[column].mean()) / df[column].std()
             prefix = 'z_'
 
-        df.rename(columns={col: prefix + col for col in metric_cols}, inplace=True)
-
+        #df.rename(columns={col: prefix + col for col in metric_cols}, inplace=True)
+        new_col = prefix + column
+        df.rename(columns={column: new_col}, inplace=True)
+        
         if plot:
-            n = len(metric_cols)
-            plt.figure(figsize=(15, 5 * n))
-            for i, col in enumerate(metric_cols):
-                new_col = prefix + col
-                plt.subplot(n, 2, 2*i+1)
-                sns.histplot(original[col], kde=True)
-                plt.title(f'До: {col}')
-                plt.subplot(n, 2, 2*i+2)
-                sns.histplot(df[new_col], kde=True)
-                plt.title(f'После: {new_col}')
+            plt.figure(figsize=(12, 5))
+            plt.subplot(1, 2, 1)
+            sns.histplot(original, kde=True)
+            plt.title(f'До: {column}')
+            plt.subplot(1, 2, 2)
+            sns.histplot(df[new_col], kde=True)
+            plt.title(f'После: {new_col}')
             plt.tight_layout()
             plt.show()
 
@@ -132,10 +181,10 @@ class DataPreprocessor:
         pairs = {
             'bart_cct_cold': ['bart_results', 'cct_cold_results'],
             'bart_cct_hot': ['bart_results', 'cct_hot_results'],
-            'bart_igt': ['bart_results', 'igt_result'],
+            'bart_igt': ['bart_results', 'igt_results'],
             'cct_cold_hot': ['cct_cold_results', 'cct_hot_results'],
-            'cct_cold_igt': ['cct_cold_results', 'igt_result'],
-            'cct_hot_igt': ['cct_hot_results', 'igt_result'],
+            'cct_cold_igt': ['cct_cold_results', 'igt_results'],
+            'cct_hot_igt': ['cct_hot_results', 'igt_results'],
         }
 
         processed_dfs = {}
@@ -172,7 +221,7 @@ class DataPreprocessor:
             return None
 
         # Корреляционная матрица
-        corr_matrix = corr_df.corr(method='pearson')
+        corr_matrix = corr_df.corr(method='spearman')
 
         # Тепловая карта
         plt.figure(figsize=(8, 6))
@@ -192,25 +241,26 @@ class DataPreprocessor:
         for i in range(n):
             for j in range(i + 1, n):
                 col1, col2 = cols[i], cols[j]
-                pearson_r, pearson_p = stats.pearsonr(df[col1], df[col2])
+                #pearson_r, pearson_p = stats.pearsonr(df[col1], df[col2])
                 spearman_r, spearman_p = stats.spearmanr(df[col1], df[col2])
+                kendall_r, kendall_p = stats.kendalltau(df[col1], df[col2])
 
                 all_corrs.append({
                     'pair': f"{col1} - {col2}",
-                    'pearson_r': round(pearson_r, 3),
-                    'pearson_p': round(pearson_p, 4),
+                    'kendall_r': round(kendall_r, 3),
+                    'kendall_p': round(kendall_p, 4),
                     'spearman_r': round(spearman_r, 3),
                     'spearman_p': round(spearman_p, 4)
                 })
 
-                if abs(pearson_r) > threshold:
+                if abs(spearman_r) > threshold:
                     strong_corrs.append({
                         'pair': f"{col1} - {col2}",
-                        'pearson': round(pearson_r, 3),
-                        'pearson_p': round(pearson_p, 4),
+                        'kendall': round(kendall_r, 3),
+                        'kendall_p': round(kendall_p, 4),
                         'spearman': round(spearman_r, 3),
                         'spearman_p': round(spearman_p, 4),
-                        'interpretation': "Сильная положительная" if pearson_r > 0 else "Сильная отрицательная"
+                        'interpretation': "Сильная положительная" if spearman_r > 0 else "Сильная отрицательная"
                     })
 
         # Вывод всех корреляций с p-value
@@ -229,7 +279,7 @@ class DataPreprocessor:
                 sns.regplot(x=df[col1], y=df[col2], scatter_kws={'alpha': 0.5})
                 plt.title(
                     f"{corr['pair']}\n"
-                    f"Pearson: {corr['pearson']} (p={corr['pearson_p']}) | "
+                    f"Kendall: {corr['kendall']} (p={corr['kendall_p']}) | "
                     f"Spearman: {corr['spearman']} (p={corr['spearman_p']})"
                 )
                 plt.xlabel(col1)
@@ -257,13 +307,12 @@ class DataPreprocessor:
     @staticmethod
     def all_methods(users_df):
         METHOD_COLUMNS = {
-            'IGT': ['igt_result', 'igt_rt'],  # Столбцы первой методики
+            'IGT': ['igt_results', 'igt_rts'],  # Столбцы первой методики
             'BART': ['bart_results', 'bart_rts'],  # Столбцы второй методики
             'CCT-hot': ['cct_hot_results'],                  # Столбцы третьей методики
             'CCT-cold': ['cct_cold_results', 'cct_cold_rts']  # Столбцы четвертой методики
         }
-
-
+        
         complete_users_mask = pd.Series(True, index=users_df.index)
 
         for method, columns in METHOD_COLUMNS.items():
@@ -303,6 +352,7 @@ class DataPreprocessor:
             gain_amt   = float(row['gain_amount'])
             loss_amt   = float(row['loss_amount'])
             points     = float(row['points'])
+            bad_cards = int(row['loss_cards'])
 
             # Ожидаемое количество очков, если все флипы — выигрышные
             expected_points = n_flips * gain_amt
@@ -324,7 +374,8 @@ class DataPreprocessor:
                     'flips': n_flips,
                     'gain_amount': gain_amt,
                     'loss_amount': loss_amt,
-                    'popped': popped
+                    'popped': popped,
+                    'loss_cards': bad_cards
                 })
 
         flips_df = pd.DataFrame.from_records(records)
@@ -332,6 +383,25 @@ class DataPreprocessor:
         flips_df.reset_index(drop=True, inplace=True)
         return flips_df
     
+    @staticmethod
+    def add_choice_column(df):
+        df = df.copy()
+        df['choice'] = 1  # по умолчанию продолжил
+
+        for (_, _), trial in df.groupby(['user_id', 'trial_number'], sort=False):
+            last_idx = trial.index[-1]
+            popped = trial['popped'].iloc[-1]
+            if not popped:
+                # остановился сам -> в последней строке решение = stop
+                df.at[last_idx, 'choice'] = 0
+            else:
+                # взорвался -> последняя карта взята по решению continue (оставляем 1)
+                pass
+        return df
+
+
+
+    @staticmethod
     def get_users_info(users):
         mean_age = np.mean(users['age'])
         std_age = np.std(users['age'], ddof=1)  # выборочное стандартное отклонение
@@ -363,3 +433,4 @@ class DataPreprocessor:
         )
         
         return result
+
